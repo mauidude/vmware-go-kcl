@@ -28,10 +28,11 @@
 package worker
 
 import (
-	log "github.com/sirupsen/logrus"
 	"math"
 	"sync"
 	"time"
+
+	log "github.com/sirupsen/logrus"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
@@ -78,7 +79,7 @@ type ShardConsumer struct {
 	checkpointer    chk.Checkpointer
 	recordProcessor kcl.IRecordProcessor
 	kclConfig       *config.KinesisClientLibConfiguration
-	stop            *chan struct{}
+	stop            chan struct{}
 	waitGroup       *sync.WaitGroup
 	consumerID      string
 	mService        metrics.MonitoringService
@@ -247,7 +248,7 @@ func (sc *ShardConsumer) getRecords(shard *par.ShardStatus) error {
 		shardIterator = getResp.NextShardIterator
 
 		select {
-		case <-*sc.stop:
+		case <-sc.stop:
 			shutdownInput := &kcl.ShutdownInput{ShutdownReason: kcl.REQUESTED, Checkpointer: recordCheckpointer}
 			sc.recordProcessor.Shutdown(shutdownInput)
 			return nil

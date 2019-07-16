@@ -61,7 +61,7 @@ type Worker struct {
 	kc               kinesisiface.KinesisAPI
 	checkpointer     chk.Checkpointer
 
-	stop      *chan struct{}
+	stop      chan struct{}
 	waitGroup *sync.WaitGroup
 	done      bool
 
@@ -131,7 +131,7 @@ func (w *Worker) Shutdown() {
 		return
 	}
 
-	close(*w.stop)
+	close(w.stop)
 	w.done = true
 	w.waitGroup.Wait()
 
@@ -197,12 +197,8 @@ func (w *Worker) initialize() error {
 	}
 
 	w.shardStatus = make(map[string]*par.ShardStatus)
-
-	stopChan := make(chan struct{})
-	w.stop = &stopChan
-
-	wg := sync.WaitGroup{}
-	w.waitGroup = &wg
+	w.stop = make(chan struct{})
+	w.waitGroup = &sync.WaitGroup{}
 
 	log.Info("Initialization complete.")
 
@@ -219,7 +215,7 @@ func (w *Worker) newShardConsumer(shard *par.ShardStatus) *ShardConsumer {
 		recordProcessor: w.processorFactory.CreateProcessor(),
 		kclConfig:       w.kclConfig,
 		consumerID:      w.workerID,
-		stop:            w.stop,
+		stop:            make(chan struct{}),
 		waitGroup:       w.waitGroup,
 		mService:        w.mService,
 		state:           WAITING_ON_PARENT_SHARDS,
@@ -298,7 +294,7 @@ func (w *Worker) eventLoop() {
 		}
 
 		select {
-		case <-*w.stop:
+		case <-w.stop:
 			log.Info("Shutting down...")
 			return
 		case <-time.After(time.Duration(w.kclConfig.ShardSyncIntervalMillis) * time.Millisecond):

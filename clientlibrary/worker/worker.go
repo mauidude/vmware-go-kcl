@@ -246,6 +246,8 @@ func (w *Worker) eventLoop() {
 			}
 		}
 
+		leasesStolen := 0
+
 		// max number of lease has not been reached yet
 		if counter < w.kclConfig.MaxLeasesForWorker {
 			for _, shard := range w.shardStatus {
@@ -285,8 +287,13 @@ func (w *Worker) eventLoop() {
 				sc := w.newShardConsumer(shard)
 				go sc.getRecords(shard)
 				w.waitGroup.Add(1)
-				// exit from for loop and not to grab more shard for now.
-				break
+
+				leasesStolen++
+
+				if leasesStolen >= w.kclConfig.MaxLeasesToStealAtOneTime {
+					// exit from for loop and do not grab more shards for now.
+					break
+				}
 			}
 		}
 
@@ -331,9 +338,9 @@ func (w *Worker) getShardIDs(startShardID string, shardInfo map[string]bool) err
 		if _, ok := w.shardStatus[*s.ShardId]; !ok {
 			log.Infof("Found new shard with id %s", *s.ShardId)
 			w.shardStatus[*s.ShardId] = &par.ShardStatus{
-				ID:                     *s.ShardId,
-				ParentShardId:          aws.StringValue(s.ParentShardId),
-				Mux:                    &sync.Mutex{},
+				ID:            *s.ShardId,
+				ParentShardId: aws.StringValue(s.ParentShardId),
+				Mux:           &sync.Mutex{},
 				StartingSequenceNumber: aws.StringValue(s.SequenceNumberRange.StartingSequenceNumber),
 				EndingSequenceNumber:   aws.StringValue(s.SequenceNumberRange.EndingSequenceNumber),
 			}

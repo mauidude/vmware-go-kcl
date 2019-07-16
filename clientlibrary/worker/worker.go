@@ -60,10 +60,11 @@ type Worker struct {
 	kclConfig        *config.KinesisClientLibConfiguration
 	kc               kinesisiface.KinesisAPI
 	checkpointer     chk.Checkpointer
+	consumers        *sync.Map
 
 	stop      chan struct{}
 	waitGroup *sync.WaitGroup
-	done      bool
+	stopOnce  sync.Once
 
 	shardStatus map[string]*par.ShardStatus
 
@@ -80,7 +81,7 @@ func NewWorker(factory kcl.IRecordProcessorFactory, kclConfig *config.KinesisCli
 		processorFactory: factory,
 		kclConfig:        kclConfig,
 		metricsConfig:    metricsConfig,
-		done:             false,
+		consumers:        &sync.Map{},
 	}
 
 	if w.metricsConfig == nil {
@@ -127,16 +128,13 @@ func (w *Worker) Start() error {
 func (w *Worker) Shutdown() {
 	log.Info("Worker shutdown in requested.")
 
-	if w.done {
-		return
-	}
+	w.stopOnce.Do(func() {
+		close(w.stop)
+		w.waitGroup.Wait()
 
-	close(w.stop)
-	w.done = true
-	w.waitGroup.Wait()
-
-	w.mService.Shutdown()
-	log.Info("Worker loop is complete. Exiting from worker.")
+		w.mService.Shutdown()
+		log.Info("Worker loop is complete. Exiting from worker.")
+	})
 }
 
 // Publish to write some data into stream. This function is mainly used for testing purpose.
@@ -197,6 +195,7 @@ func (w *Worker) initialize() error {
 	}
 
 	w.shardStatus = make(map[string]*par.ShardStatus)
+
 	w.stop = make(chan struct{})
 	w.waitGroup = &sync.WaitGroup{}
 
@@ -267,25 +266,12 @@ func (w *Worker) eventLoop() {
 					continue
 				}
 
-				err = w.checkpointer.GetLease(shard, w.workerID)
-				if err != nil {
-					// cannot get lease on the shard
-					if err.Error() != chk.ErrLeaseNotAquired {
-						log.Error(err)
-					}
+				acquired := w.acquire(shard)
+				if !acquired {
 					continue
 				}
 
-				// log metrics on got lease
-				w.mService.LeaseGained(shard.ID)
-
-				log.Infof("Start Shard Consumer for shard: %v", shard.ID)
-				sc := w.newShardConsumer(shard)
-				go sc.getRecords(shard)
-				w.waitGroup.Add(1)
-
 				leasesStolen++
-
 				if leasesStolen >= w.kclConfig.MaxLeasesToStealAtOneTime {
 					// exit from for loop and do not grab more shards for now.
 					break
@@ -296,13 +282,56 @@ func (w *Worker) eventLoop() {
 		select {
 		case <-w.stop:
 			log.Info("Shutting down...")
+
+			wg := sync.WaitGroup{}
+
+			// stopping all shard consumers
+			w.consumers.Range(func(_, sc interface{}) bool {
+				wg.Add(1)
+				go func() {
+					sc.(*ShardConsumer).close()
+					wg.Done()
+				}()
+				return true
+			})
+
+			wg.Wait()
+
 			return
 		case <-time.After(time.Duration(w.kclConfig.ShardSyncIntervalMillis) * time.Millisecond):
 		}
 	}
 }
 
-// List all ACTIVE shard and store them into shardStatus table
+func (w *Worker) acquire(shard *par.ShardStatus) bool {
+	err := w.checkpointer.GetLease(shard, w.workerID)
+	if err != nil {
+		// cannot get lease on the shard
+		if err.Error() != chk.ErrLeaseNotAquired {
+			log.Error(err)
+		}
+
+		return false
+	}
+
+	// log metrics on got lease
+	w.mService.LeaseGained(shard.ID)
+
+	log.Infof("Start Shard Consumer for shard: %v", shard.ID)
+	sc := w.newShardConsumer(shard)
+
+	w.waitGroup.Add(1)
+	w.consumers.Store(shard.ID, sc)
+
+	go func() {
+		sc.getRecords(shard)
+		w.consumers.Delete(shard.ID)
+	}()
+
+	return true
+}
+
+// List all ACTIVE shards and store them into shardStatus table
 // If shard has been removed, need to exclude it from cached shard status.
 func (w *Worker) getShardIDs(startShardID string, shardInfo map[string]bool) error {
 	// The default pagination limit is 100.

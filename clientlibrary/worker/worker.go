@@ -365,7 +365,7 @@ func (w *Worker) getShardIDs(startShardID string, shardInfo map[string]bool) err
 			w.shardStatus[*s.ShardId] = &par.ShardStatus{
 				ID:            *s.ShardId,
 				ParentShardId: aws.StringValue(s.ParentShardId),
-				Mux:           &sync.Mutex{},
+				Mux:           &sync.RWMutex{},
 				StartingSequenceNumber: aws.StringValue(s.SequenceNumberRange.StartingSequenceNumber),
 				EndingSequenceNumber:   aws.StringValue(s.SequenceNumberRange.EndingSequenceNumber),
 			}

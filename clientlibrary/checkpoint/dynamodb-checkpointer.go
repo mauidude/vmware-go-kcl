@@ -29,9 +29,10 @@ package checkpoint
 
 import (
 	"errors"
+	"time"
+
 	"github.com/aws/aws-sdk-go/aws/client"
 	"github.com/aws/aws-sdk-go/aws/session"
-	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
@@ -195,7 +196,10 @@ func (checkpointer *DynamoCheckpoint) GetLease(shard *par.ShardStatus, newAssign
 
 // CheckpointSequence writes a checkpoint at the designated sequence ID
 func (checkpointer *DynamoCheckpoint) CheckpointSequence(shard *par.ShardStatus) error {
-	leaseTimeout := shard.LeaseTimeout.UTC().Format(time.RFC3339)
+	duration := time.Duration(checkpointer.kclConfig.LeaseDurationMillis) * time.Millisecond
+	leaseTimeout := time.Now().UTC().Add(duration)
+	shard.SetLeaseTimeout(leaseTimeout)
+
 	marshalledCheckpoint := map[string]*dynamodb.AttributeValue{
 		LEASE_KEY_KEY: {
 			S: aws.String(shard.ID),
@@ -207,7 +211,7 @@ func (checkpointer *DynamoCheckpoint) CheckpointSequence(shard *par.ShardStatus)
 			S: aws.String(shard.AssignedTo),
 		},
 		LEASE_TIMEOUT_KEY: {
-			S: aws.String(leaseTimeout),
+			S: aws.String(leaseTimeout.Format(time.RFC3339)),
 		},
 	}
 
@@ -311,9 +315,9 @@ func (checkpointer *DynamoCheckpoint) saveItem(item map[string]*dynamodb.Attribu
 
 func (checkpointer *DynamoCheckpoint) conditionalUpdate(conditionExpression string, expressionAttributeValues map[string]*dynamodb.AttributeValue, item map[string]*dynamodb.AttributeValue) error {
 	return checkpointer.putItem(&dynamodb.PutItemInput{
-		ConditionExpression:       aws.String(conditionExpression),
-		TableName:                 aws.String(checkpointer.TableName),
-		Item:                      item,
+		ConditionExpression: aws.String(conditionExpression),
+		TableName:           aws.String(checkpointer.TableName),
+		Item:                item,
 		ExpressionAttributeValues: expressionAttributeValues,
 	})
 }

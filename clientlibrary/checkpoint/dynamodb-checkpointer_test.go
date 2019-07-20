@@ -29,10 +29,11 @@ package checkpoint
 
 import (
 	"errors"
-	"github.com/stretchr/testify/assert"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
@@ -75,7 +76,7 @@ func TestGetLeaseNotAquired(t *testing.T) {
 	err := checkpoint.GetLease(&par.ShardStatus{
 		ID:         "0001",
 		Checkpoint: "",
-		Mux:        &sync.Mutex{},
+		Mux:        &sync.RWMutex{},
 	}, "abcd-efgh")
 	if err != nil {
 		t.Errorf("Error getting lease %s", err)
@@ -84,7 +85,7 @@ func TestGetLeaseNotAquired(t *testing.T) {
 	err = checkpoint.GetLease(&par.ShardStatus{
 		ID:         "0001",
 		Checkpoint: "",
-		Mux:        &sync.Mutex{},
+		Mux:        &sync.RWMutex{},
 	}, "ijkl-mnop")
 	if err == nil || err.Error() != ErrLeaseNotAquired {
 		t.Errorf("Got a lease when it was already held by abcd-efgh: %s", err)
@@ -125,7 +126,7 @@ func TestGetLeaseAquired(t *testing.T) {
 	shard := &par.ShardStatus{
 		ID:         "0001",
 		Checkpoint: "deadbeef",
-		Mux:        &sync.Mutex{},
+		Mux:        &sync.RWMutex{},
 	}
 	err := checkpoint.GetLease(shard, "ijkl-mnop")
 
@@ -146,7 +147,7 @@ func TestGetLeaseAquired(t *testing.T) {
 
 	status := &par.ShardStatus{
 		ID:  shard.ID,
-		Mux: &sync.Mutex{},
+		Mux: &sync.RWMutex{},
 	}
 	checkpoint.FetchCheckpoint(status)
 

@@ -40,8 +40,8 @@ import (
 	"github.com/aws/aws-sdk-go/service/dynamodb/dynamodbiface"
 	log "github.com/sirupsen/logrus"
 
-	"github.com/vmware/vmware-go-kcl/clientlibrary/config"
-	par "github.com/vmware/vmware-go-kcl/clientlibrary/partition"
+	"github.com/mauidude/vmware-go-kcl/clientlibrary/config"
+	par "github.com/mauidude/vmware-go-kcl/clientlibrary/partition"
 )
 
 const (

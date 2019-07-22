@@ -28,21 +28,23 @@
 package worker
 
 import (
-	log "github.com/sirupsen/logrus"
 	"math"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	log "github.com/sirupsen/logrus"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/service/kinesis"
 	"github.com/aws/aws-sdk-go/service/kinesis/kinesisiface"
 
-	chk "github.com/vmware/vmware-go-kcl/clientlibrary/checkpoint"
-	"github.com/vmware/vmware-go-kcl/clientlibrary/config"
-	kcl "github.com/vmware/vmware-go-kcl/clientlibrary/interfaces"
-	"github.com/vmware/vmware-go-kcl/clientlibrary/metrics"
-	par "github.com/vmware/vmware-go-kcl/clientlibrary/partition"
+	chk "github.com/mauidude/vmware-go-kcl/clientlibrary/checkpoint"
+	"github.com/mauidude/vmware-go-kcl/clientlibrary/config"
+	kcl "github.com/mauidude/vmware-go-kcl/clientlibrary/interfaces"
+	"github.com/mauidude/vmware-go-kcl/clientlibrary/metrics"
+	par "github.com/mauidude/vmware-go-kcl/clientlibrary/partition"
 )
 
 const (
@@ -72,17 +74,20 @@ type ShardConsumerState int
 // ShardConsumer is responsible for consuming data records of a (specified) shard.
 // Note: ShardConsumer only deal with one shard.
 type ShardConsumer struct {
-	streamName      string
-	shard           *par.ShardStatus
-	kc              kinesisiface.KinesisAPI
-	checkpointer    chk.Checkpointer
-	recordProcessor kcl.IRecordProcessor
-	kclConfig       *config.KinesisClientLibConfiguration
-	stop            *chan struct{}
-	waitGroup       *sync.WaitGroup
-	consumerID      string
-	mService        metrics.MonitoringService
-	state           ShardConsumerState
+	streamName         string
+	shard              *par.ShardStatus
+	kc                 kinesisiface.KinesisAPI
+	checkpointer       chk.Checkpointer
+	recordProcessor    kcl.IRecordProcessor
+	kclConfig          *config.KinesisClientLibConfiguration
+	stop               chan struct{}
+	waitGroup          *sync.WaitGroup
+	consumerID         string
+	mService           metrics.MonitoringService
+	state              ShardConsumerState
+	closeOnce          sync.Once
+	recordCheckpointer kcl.IRecordProcessorCheckpointer
+	done               int32
 }
 
 func (sc *ShardConsumer) getShardIterator(shard *par.ShardStatus) (*string, error) {
@@ -126,8 +131,10 @@ func (sc *ShardConsumer) getShardIterator(shard *par.ShardStatus) (*string, erro
 // getRecords continously poll one shard for data record
 // Precondition: it currently has the lease on the shard.
 func (sc *ShardConsumer) getRecords(shard *par.ShardStatus) error {
-	defer sc.waitGroup.Done()
-	defer sc.releaseLease(shard)
+	defer func() {
+		sc.releaseLease(shard)
+		sc.waitGroup.Done()
+	}()
 
 	// If the shard is child shard, need to wait until the parent finished.
 	if err := sc.waitOnParentShard(shard); err != nil {
@@ -151,25 +158,11 @@ func (sc *ShardConsumer) getRecords(shard *par.ShardStatus) error {
 	}
 	sc.recordProcessor.Initialize(input)
 
-	recordCheckpointer := NewRecordProcessorCheckpoint(shard, sc.checkpointer)
+	sc.recordCheckpointer = NewRecordProcessorCheckpoint(shard, sc.checkpointer)
 	retriedErrors := 0
 
 	for {
 		getRecordsStartTime := time.Now()
-		if time.Now().UTC().After(shard.LeaseTimeout.Add(-5 * time.Second)) {
-			log.Debugf("Refreshing lease on shard: %s for worker: %s", shard.ID, sc.consumerID)
-			err = sc.checkpointer.GetLease(shard, sc.consumerID)
-			if err != nil {
-				if err.Error() == chk.ErrLeaseNotAquired {
-					log.Warnf("Failed in acquiring lease on shard: %s for worker: %s", shard.ID, sc.consumerID)
-					return nil
-				}
-				// log and return error
-				log.Errorf("Error in refreshing lease on shard: %s for worker: %s. Error: %+v",
-					shard.ID, sc.consumerID, err)
-				return err
-			}
-		}
 
 		log.Debugf("Trying to read %d record from iterator: %v", sc.kclConfig.MaxRecords, aws.StringValue(shardIterator))
 		getRecordsArgs := &kinesis.GetRecordsInput{
@@ -200,7 +193,7 @@ func (sc *ShardConsumer) getRecords(shard *par.ShardStatus) error {
 		input := &kcl.ProcessRecordsInput{
 			Records:            getResp.Records,
 			MillisBehindLatest: aws.Int64Value(getResp.MillisBehindLatest),
-			Checkpointer:       recordCheckpointer,
+			Checkpointer:       sc.recordCheckpointer,
 		}
 
 		recordLength := len(input.Records)
@@ -240,20 +233,37 @@ func (sc *ShardConsumer) getRecords(shard *par.ShardStatus) error {
 		// The shard has been closed, so no new records can be read from it
 		if getResp.NextShardIterator == nil {
 			log.Infof("Shard %s closed", shard.ID)
-			shutdownInput := &kcl.ShutdownInput{ShutdownReason: kcl.TERMINATE, Checkpointer: recordCheckpointer}
-			sc.recordProcessor.Shutdown(shutdownInput)
+			sc.shutdown(kcl.TERMINATE)
+
 			return nil
 		}
 		shardIterator = getResp.NextShardIterator
 
-		select {
-		case <-*sc.stop:
-			shutdownInput := &kcl.ShutdownInput{ShutdownReason: kcl.REQUESTED, Checkpointer: recordCheckpointer}
-			sc.recordProcessor.Shutdown(shutdownInput)
+		if atomic.LoadInt32(&sc.done) > 0 {
 			return nil
-		case <-time.After(1 * time.Nanosecond):
 		}
 	}
+}
+
+func (sc *ShardConsumer) shutdown(reason kcl.ShutdownReason) {
+	sc.closeOnce.Do(func() {
+		// never consumed so no need to shut down
+		if sc.recordCheckpointer == nil {
+			return
+		}
+
+		log.Debugf("Shard consumer %s stopping with reason %d", sc.shard.ID, reason)
+
+		shutdownInput := &kcl.ShutdownInput{ShutdownReason: reason, Checkpointer: sc.recordCheckpointer}
+		sc.recordProcessor.Shutdown(shutdownInput)
+	})
+}
+
+func (sc *ShardConsumer) close() {
+	log.Debugf("Shard consumer %s closing", sc.shard.ID)
+	sc.shutdown(kcl.REQUESTED)
+
+	atomic.AddInt32(&sc.done, 1)
 }
 
 // Need to wait until the parent shard finished
@@ -264,7 +274,7 @@ func (sc *ShardConsumer) waitOnParentShard(shard *par.ShardStatus) error {
 
 	pshard := &par.ShardStatus{
 		ID:  shard.ParentShardId,
-		Mux: &sync.Mutex{},
+		Mux: &sync.RWMutex{},
 	}
 
 	for {

@@ -31,11 +31,11 @@ import (
 	log "github.com/sirupsen/logrus"
 
 	"github.com/stretchr/testify/assert"
-	chk "github.com/vmware/vmware-go-kcl/clientlibrary/checkpoint"
-	cfg "github.com/vmware/vmware-go-kcl/clientlibrary/config"
-	par "github.com/vmware/vmware-go-kcl/clientlibrary/partition"
-	"github.com/vmware/vmware-go-kcl/clientlibrary/utils"
-	wk "github.com/vmware/vmware-go-kcl/clientlibrary/worker"
+	chk "github.com/mauidude/vmware-go-kcl/clientlibrary/checkpoint"
+	cfg "github.com/mauidude/vmware-go-kcl/clientlibrary/config"
+	par "github.com/mauidude/vmware-go-kcl/clientlibrary/partition"
+	"github.com/mauidude/vmware-go-kcl/clientlibrary/utils"
+	wk "github.com/mauidude/vmware-go-kcl/clientlibrary/worker"
 )
 
 func TestWorkerInjectCheckpointer(t *testing.T) {
@@ -83,7 +83,7 @@ func TestWorkerInjectCheckpointer(t *testing.T) {
 	// verify the checkpointer after graceful shutdown
 	status := &par.ShardStatus{
 		ID:  shardID,
-		Mux: &sync.Mutex{},
+		Mux: &sync.RWMutex{},
 	}
 	checkpointer.FetchCheckpoint(status)
 

@@ -29,18 +29,20 @@ package checkpoint
 
 import (
 	"errors"
+	"time"
+
 	"github.com/aws/aws-sdk-go/aws/client"
 	"github.com/aws/aws-sdk-go/aws/session"
-	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/service/dynamodb"
 	"github.com/aws/aws-sdk-go/service/dynamodb/dynamodbiface"
+	"github.com/aws/aws-sdk-go/service/dynamodb/expression"
 	log "github.com/sirupsen/logrus"
 
-	"github.com/vmware/vmware-go-kcl/clientlibrary/config"
-	par "github.com/vmware/vmware-go-kcl/clientlibrary/partition"
+	"github.com/mauidude/vmware-go-kcl/clientlibrary/config"
+	par "github.com/mauidude/vmware-go-kcl/clientlibrary/partition"
 )
 
 const (
@@ -195,27 +197,36 @@ func (checkpointer *DynamoCheckpoint) GetLease(shard *par.ShardStatus, newAssign
 
 // CheckpointSequence writes a checkpoint at the designated sequence ID
 func (checkpointer *DynamoCheckpoint) CheckpointSequence(shard *par.ShardStatus) error {
-	leaseTimeout := shard.LeaseTimeout.UTC().Format(time.RFC3339)
-	marshalledCheckpoint := map[string]*dynamodb.AttributeValue{
+	duration := time.Duration(checkpointer.LeaseDuration) * time.Millisecond
+	leaseTimeout := time.Now().UTC().Add(duration)
+	shard.SetLeaseTimeout(leaseTimeout)
+
+	key := map[string]*dynamodb.AttributeValue{
 		LEASE_KEY_KEY: {
 			S: aws.String(shard.ID),
 		},
-		CHECKPOINT_SEQUENCE_NUMBER_KEY: {
-			S: aws.String(shard.Checkpoint),
-		},
-		LEASE_OWNER_KEY: {
-			S: aws.String(shard.AssignedTo),
-		},
-		LEASE_TIMEOUT_KEY: {
-			S: aws.String(leaseTimeout),
-		},
 	}
 
-	if len(shard.ParentShardId) > 0 {
-		marshalledCheckpoint[PARENT_SHARD_ID_KEY] = &dynamodb.AttributeValue{S: &shard.ParentShardId}
+	update := expression.
+		Set(expression.Name(CHECKPOINT_SEQUENCE_NUMBER_KEY), expression.Value(shard.Checkpoint)).
+		Set(expression.Name(LEASE_TIMEOUT_KEY), expression.Value(leaseTimeout.Format(time.RFC3339)))
+
+	expr, err := expression.NewBuilder().WithUpdate(update).Build()
+	if err != nil {
+		return err
 	}
 
-	return checkpointer.saveItem(marshalledCheckpoint)
+	_, err = checkpointer.svc.UpdateItem(&dynamodb.UpdateItemInput{
+		TableName:                 aws.String(checkpointer.TableName),
+		Key:                       key,
+		UpdateExpression:          expr.Update(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+	})
+
+	log.Debugf("checkpointed shard %s at %s", shard.ID, shard.Checkpoint)
+
+	return err
 }
 
 // FetchCheckpoint retrieves the checkpoint for the given shard
@@ -311,9 +322,9 @@ func (checkpointer *DynamoCheckpoint) saveItem(item map[string]*dynamodb.Attribu
 
 func (checkpointer *DynamoCheckpoint) conditionalUpdate(conditionExpression string, expressionAttributeValues map[string]*dynamodb.AttributeValue, item map[string]*dynamodb.AttributeValue) error {
 	return checkpointer.putItem(&dynamodb.PutItemInput{
-		ConditionExpression:       aws.String(conditionExpression),
-		TableName:                 aws.String(checkpointer.TableName),
-		Item:                      item,
+		ConditionExpression: aws.String(conditionExpression),
+		TableName:           aws.String(checkpointer.TableName),
+		Item:                item,
 		ExpressionAttributeValues: expressionAttributeValues,
 	})
 }

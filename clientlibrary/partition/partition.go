@@ -37,7 +37,7 @@ type ShardStatus struct {
 	ParentShardId string
 	Checkpoint    string
 	AssignedTo    string
-	Mux           *sync.Mutex
+	Mux           *sync.RWMutex
 	LeaseTimeout  time.Time
 	// Shard Range
 	StartingSequenceNumber string
@@ -45,9 +45,23 @@ type ShardStatus struct {
 	EndingSequenceNumber string
 }
 
-func (ss *ShardStatus) GetLeaseOwner() string {
+func (ss *ShardStatus) GetLeaseTimeout() time.Time {
+	ss.Mux.RLock()
+	defer ss.Mux.RUnlock()
+
+	return ss.LeaseTimeout
+}
+
+func (ss *ShardStatus) SetLeaseTimeout(t time.Time) {
 	ss.Mux.Lock()
 	defer ss.Mux.Unlock()
+
+	ss.LeaseTimeout = t
+}
+
+func (ss *ShardStatus) GetLeaseOwner() string {
+	ss.Mux.RLock()
+	defer ss.Mux.RUnlock()
 	return ss.AssignedTo
 }
 

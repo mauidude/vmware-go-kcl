@@ -34,10 +34,11 @@
 package config
 
 import (
-	"github.com/aws/aws-sdk-go/aws/credentials"
 	"time"
 
-	"github.com/vmware/vmware-go-kcl/clientlibrary/utils"
+	"github.com/aws/aws-sdk-go/aws/credentials"
+
+	"github.com/mauidude/vmware-go-kcl/clientlibrary/utils"
 )
 
 // NewKinesisClientLibConfig to create a default KinesisClientLibConfiguration based on the required fields.

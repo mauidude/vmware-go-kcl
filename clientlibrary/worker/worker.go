@@ -129,7 +129,7 @@ func (w *Worker) Shutdown() {
 	log.Info("Worker shutdown in requested.")
 
 	w.stopOnce.Do(func() {
-		close(w.stop)
+		w.stop <- struct{}{}
 		w.waitGroup.Wait()
 
 		w.mService.Shutdown()

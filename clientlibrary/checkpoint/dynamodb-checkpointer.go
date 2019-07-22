@@ -38,6 +38,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/service/dynamodb"
 	"github.com/aws/aws-sdk-go/service/dynamodb/dynamodbiface"
+	"github.com/aws/aws-sdk-go/service/dynamodb/expression"
 	log "github.com/sirupsen/logrus"
 
 	"github.com/mauidude/vmware-go-kcl/clientlibrary/config"
@@ -70,7 +71,7 @@ func NewDynamoCheckpoint(kclConfig *config.KinesisClientLibConfiguration) *Dynam
 		TableName:               kclConfig.TableName,
 		leaseTableReadCapacity:  int64(kclConfig.InitialLeaseTableReadCapacity),
 		leaseTableWriteCapacity: int64(kclConfig.InitialLeaseTableWriteCapacity),
-		LeaseDuration:           kclConfig.FailoverTimeMillis,
+		LeaseDuration:           kclConfig.LeaseDurationMillis,
 		kclConfig:               kclConfig,
 		Retries:                 NumMaxRetries,
 	}
@@ -200,26 +201,32 @@ func (checkpointer *DynamoCheckpoint) CheckpointSequence(shard *par.ShardStatus)
 	leaseTimeout := time.Now().UTC().Add(duration)
 	shard.SetLeaseTimeout(leaseTimeout)
 
-	marshalledCheckpoint := map[string]*dynamodb.AttributeValue{
+	key := map[string]*dynamodb.AttributeValue{
 		LEASE_KEY_KEY: {
 			S: aws.String(shard.ID),
 		},
-		CHECKPOINT_SEQUENCE_NUMBER_KEY: {
-			S: aws.String(shard.Checkpoint),
-		},
-		LEASE_OWNER_KEY: {
-			S: aws.String(shard.AssignedTo),
-		},
-		LEASE_TIMEOUT_KEY: {
-			S: aws.String(leaseTimeout.Format(time.RFC3339)),
-		},
 	}
 
-	if len(shard.ParentShardId) > 0 {
-		marshalledCheckpoint[PARENT_SHARD_ID_KEY] = &dynamodb.AttributeValue{S: &shard.ParentShardId}
+	update := expression.
+		Set(expression.Name(CHECKPOINT_SEQUENCE_NUMBER_KEY), expression.Value(shard.Checkpoint)).
+		Set(expression.Name(LEASE_TIMEOUT_KEY), expression.Value(leaseTimeout.Format(time.RFC3339)))
+
+	expr, err := expression.NewBuilder().WithUpdate(update).Build()
+	if err != nil {
+		return err
 	}
 
-	return checkpointer.saveItem(marshalledCheckpoint)
+	_, err = checkpointer.svc.UpdateItem(&dynamodb.UpdateItemInput{
+		TableName:                 aws.String(checkpointer.TableName),
+		Key:                       key,
+		UpdateExpression:          expr.Update(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+	})
+
+	log.Debugf("checkpointed shard %s at %s", shard.ID, shard.Checkpoint)
+
+	return err
 }
 
 // FetchCheckpoint retrieves the checkpoint for the given shard

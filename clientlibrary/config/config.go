@@ -51,8 +51,6 @@ const (
 	// AT_TIMESTAMP start from the record at or after the specified server-side Timestamp.
 	AT_TIMESTAMP
 
-	DEFAULT_LEASE_DURATION_MILLIS = 10000
-
 	// The location in the shard from which the KinesisClientLibrary will start fetching records from
 	// when the application starts for the first time and there is no checkpoint for the shard.
 	DEFAULT_INITIAL_POSITION_IN_STREAM = LATEST
@@ -258,8 +256,6 @@ type (
 		// Worker should skip syncing shards and leases at startup if leases are present
 		// This is useful for optimizing deployments to large fleets working on a stable stream.
 		SkipShardSyncAtWorkerInitializationIfLeasesExist bool
-
-		LeaseDurationMillis int
 	}
 )
 

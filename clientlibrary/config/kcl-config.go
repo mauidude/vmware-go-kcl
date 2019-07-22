@@ -93,7 +93,6 @@ func NewKinesisClientLibConfigWithCredentials(applicationName, streamName, regio
 		InitialLeaseTableReadCapacity:                    DEFAULT_INITIAL_LEASE_TABLE_READ_CAPACITY,
 		InitialLeaseTableWriteCapacity:                   DEFAULT_INITIAL_LEASE_TABLE_WRITE_CAPACITY,
 		SkipShardSyncAtWorkerInitializationIfLeasesExist: DEFAULT_SKIP_SHARD_SYNC_AT_STARTUP_IF_LEASES_EXIST,
-		LeaseDurationMillis:                              DEFAULT_LEASE_DURATION_MILLIS,
 	}
 }
 
@@ -150,13 +149,6 @@ func (c *KinesisClientLibConfiguration) WithMaxRecords(maxRecords int) *KinesisC
 func (c *KinesisClientLibConfiguration) WithMaxLeasesForWorker(n int) *KinesisClientLibConfiguration {
 	checkIsValuePositive("MaxLeasesForWorker", n)
 	c.MaxLeasesForWorker = n
-	return c
-}
-
-// WithLeaseDuration configures the hlength of a lease.
-func (c *KinesisClientLibConfiguration) WithLeaseDuration(n int) *KinesisClientLibConfiguration {
-	checkIsValuePositive("LeaseDurationMillis", n)
-	c.LeaseDurationMillis = n
 	return c
 }
 

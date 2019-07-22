@@ -71,7 +71,7 @@ func NewDynamoCheckpoint(kclConfig *config.KinesisClientLibConfiguration) *Dynam
 		TableName:               kclConfig.TableName,
 		leaseTableReadCapacity:  int64(kclConfig.InitialLeaseTableReadCapacity),
 		leaseTableWriteCapacity: int64(kclConfig.InitialLeaseTableWriteCapacity),
-		LeaseDuration:           kclConfig.LeaseDurationMillis,
+		LeaseDuration:           kclConfig.FailoverTimeMillis,
 		kclConfig:               kclConfig,
 		Retries:                 NumMaxRetries,
 	}
@@ -197,7 +197,7 @@ func (checkpointer *DynamoCheckpoint) GetLease(shard *par.ShardStatus, newAssign
 
 // CheckpointSequence writes a checkpoint at the designated sequence ID
 func (checkpointer *DynamoCheckpoint) CheckpointSequence(shard *par.ShardStatus) error {
-	duration := time.Duration(checkpointer.kclConfig.LeaseDurationMillis) * time.Millisecond
+	duration := time.Duration(checkpointer.LeaseDuration) * time.Millisecond
 	leaseTimeout := time.Now().UTC().Add(duration)
 	shard.SetLeaseTimeout(leaseTimeout)
 
